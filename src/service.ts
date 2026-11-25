@@ -76,9 +76,7 @@ async function ratesText(): Promise<string> {
 
 // ---------- Команды бота ----------
 
-const HELP_TEXT = ["Доступные команды:", "/weather - погода в Алматы", "/rates - курс валют"].join(
-	"\n",
-);
+const HELP_TEXT = ["Мои команды:", "/weather - погода в Алматы", "/rates - курс валют"].join("\n");
 
 // Принимает текст сообщения и возвращает текст ответа
 export async function answerFor(text: string): Promise<string> {
