@@ -2,22 +2,34 @@
 // Telegram сам присылает каждое новое сообщение POST-запросом на адрес /telegram (webhook).
 
 import { env } from "cloudflare:workers";
-import { answerFor } from "./service.ts";
+import { answerFor, answerForLocation, HELP_TEXT } from "./service.ts";
 
-// Из всего события нам нужны только чат и текст сообщения
+// Из всего события нам нужны только чат, текст и геолокация
 interface Update {
 	message?: {
-		chat: { id: number };
+		chat: { id: number; type?: string };
 		text?: string;
+		location?: { latitude: number; longitude: number };
 	};
 }
 
+// Кнопки под полем ввода. Нажатие отправляет боту текст кнопки,
+// а последняя кнопка отправляет геолокацию
+const KEYBOARD = {
+	keyboard: [
+		[{ text: "🌤 Алматы" }, { text: "💱 Курс" }, { text: "📦 Всё сразу" }],
+		[{ text: "🏁 Гонка" }, { text: "🪆 Матрёшка" }],
+		[{ text: "📍 Погода рядом", request_location: true }],
+	],
+	resize_keyboard: true,
+};
+
 // Отправляет сообщение через Telegram Bot API
-async function sendMessage(chatId: number, text: string): Promise<void> {
+async function sendMessage(chatId: number, text: string, keyboard?: object): Promise<void> {
 	const response = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ chat_id: chatId, text }),
+		body: JSON.stringify({ chat_id: chatId, text, reply_markup: keyboard }),
 	});
 
 	if (!response.ok) {
@@ -47,19 +59,29 @@ async function isFromTelegram(request: Request): Promise<boolean> {
 
 async function handleUpdate(update: Update | null): Promise<void> {
 	const message = update?.message;
-	if (!message?.text) {
-		return; // не текст (картинка, стикер и т.д.) - пропускаем
+	if (!message || (!message.text && !message.location)) {
+		return; // картинка, стикер и т.д. - пропускаем
+	}
+
+	const isPrivate = (message.chat.type ?? "private") === "private";
+	// В группах отвечаем только на команды, иначе бот будет отвечать на каждую фразу
+	if (!isPrivate && !message.text?.startsWith("/")) {
+		return;
 	}
 
 	let reply: string;
 	try {
-		reply = await answerFor(message.text);
+		reply = message.location
+			? await answerForLocation(message.location.latitude, message.location.longitude)
+			: await answerFor(message.text ?? "");
 	} catch (error) {
 		console.error("Не удалось подготовить ответ:", error);
 		reply = "Не удалось получить данные, попробуйте чуть позже.";
 	}
 
-	await sendMessage(message.chat.id, reply);
+	// Кнопки показываем вместе с подсказкой (в группах Telegram не разрешает кнопку геолокации)
+	const keyboard = isPrivate && reply === HELP_TEXT ? KEYBOARD : undefined;
+	await sendMessage(message.chat.id, reply, keyboard);
 }
 
 export default {
