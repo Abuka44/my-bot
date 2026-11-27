@@ -1,8 +1,9 @@
 import { SELF } from "cloudflare:test";
 import { afterEach, expect, it, vi } from "vite-plus/test";
+import { answerFor } from "../src/service.ts";
 
 // Подменяем fetch: тесты не ходят в интернет, а запоминают, что бот отправил в Telegram
-function stubApis(options: { apiDown?: boolean } = {}) {
+function stubApis(options: { apiDown?: boolean; ratesDown?: boolean } = {}) {
 	const sent: { url: string; body: { chat_id: number; text: string } }[] = [];
 
 	vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
@@ -15,6 +16,9 @@ function stubApis(options: { apiDown?: boolean } = {}) {
 		}
 		if (input.startsWith("https://api.open-meteo.com/")) {
 			return Response.json({ current: { temperature_2m: 4.6, wind_speed_10m: 2.7 } });
+		}
+		if (options.ratesDown) {
+			return new Response("error", { status: 500 });
 		}
 		return Response.json({
 			time_last_update_utc: "Fri, 20 Nov 2026 00:02:32 +0000",
@@ -81,6 +85,35 @@ it("сообщает, если сервис данных недоступен", 
 
 	expect(response.status).toBe(200);
 	expect(sent[0]?.body.text).toBe("Не удалось получить данные, попробуйте чуть позже.");
+});
+
+it("/all отправляет погоду и курс одним сообщением", async () => {
+	const sent = stubApis();
+	await message("/all");
+
+	expect(sent).toHaveLength(1);
+	expect(sent[0]?.body.text).toContain("Температура: 4.6 °C");
+	expect(sent[0]?.body.text).toContain("1 USD = 450.00 KZT");
+});
+
+it("/all отправляет погоду, даже если курсы недоступны", async () => {
+	const sent = stubApis({ ratesDown: true });
+	await message("/all");
+
+	expect(sent[0]?.body.text).toContain("Температура: 4.6 °C");
+	expect(sent[0]?.body.text).toContain("Курс валют сейчас недоступен.");
+});
+
+it("не ждёт зависший сервис дольше 5 секунд", async () => {
+	vi.useFakeTimers();
+	// Promise, который никогда не завершается: так ведёт себя зависший сервер
+	vi.stubGlobal("fetch", () => new Promise<Response>(() => {}));
+
+	const failure = expect(answerFor("/weather")).rejects.toThrow("Нет ответа за 5000 мс");
+	await vi.advanceTimersByTimeAsync(5000);
+	await failure;
+
+	vi.useRealTimers();
 });
 
 it("пропускает события без текста", async () => {
